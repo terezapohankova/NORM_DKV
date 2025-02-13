@@ -33,7 +33,7 @@ class Tool1(object):
         param0 = arcpy.Parameter(
             displayName="Input Layer or Table",
             name="input_layer",
-            datatype=["GPFeatureLayer", "DETable", "DEShapeFile"],  # Allowing feature layer, table, or shapefile
+            datatype=["GPFeatureLayer"],  # Allowing feature layer, table, or shapefile
             parameterType="Required",
             direction="Input"
         )
@@ -43,7 +43,7 @@ class Tool1(object):
         param1 = arcpy.Parameter(
             displayName="Output Layer or Table",
             name="out_features",
-            datatype=["GPFeatureLayer", "DETable", "DEShapeFile"],  # Allowing feature layer, table, or shapefile
+            datatype=["GPFeatureLayer"],  # Allowing feature layer, table, or shapefile
             parameterType="Required",
             direction="Output"
         )
@@ -62,8 +62,14 @@ class Tool1(object):
         param1.parameterDependencies = [param0.name]  # Output depends on Input
         param1.schema.clone = True  # Cloning schema to ensure output matches input format
 
+
+
         # Return the parameter list (required by the toolbox)
         params = [param0, param1, param2]
+
+        # Set the filter to accept only fields that are Short or Long type
+        params[2].filter.list = ['Short', 'Long', 'Float', 'Double']
+        params[2].parameterDependencies = [params[0].name]
                 
         return params
     
@@ -72,10 +78,9 @@ class Tool1(object):
         return True
 
     def updateParameters(self, parameters):
-        """Modify the values and properties of parameters before internal
-        validation is performed.  This method is called whenever a parameter
-        has been changed."""
+
         return
+
 
     def updateMessages(self, parameters):
         """Modify the messages created by internal validation for each tool
