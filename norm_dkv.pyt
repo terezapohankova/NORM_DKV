@@ -15,10 +15,91 @@ class Toolbox(object):
 
         # List of tool classes associated with this toolbox
         # In this case, it includes Tool1 (the tool we're defining)
-        self.tools = [FCtoGDB, SHP2SHP, table2table]
+        self.tools = [fc, shp, table]
 
 
-class FCtoGDB(object):
+def normalize_and_categorize(self, input_layer, output_layer, column):
+        """Shared function for normalizing and categorizing."""
+        # Add common logic here
+        FIELD_TYPE_NORM = "DOUBLE"  # 'NORMAL' field will be of type DOUBLE
+        FIELD_TYPE_CAT = "INTEGER"  # 'CATS' field will be of type INTEGER
+        
+        # Create a copy of the input layer to preserve original data
+        input_layer_copy = arcpy.Copy_management(input_layer, output_layer)
+        
+        # Add a field called 'NORMAL' in the copied layer for normalization calculation
+        arcpy.management.AddField(input_layer_copy, "NORMAL", FIELD_TYPE_NORM)
+        
+        # Add a field called 'CATS' in the copied layer for categorization calculation
+        arcpy.management.AddField(input_layer_copy, "CATS", FIELD_TYPE_CAT)
+        
+        # Initialize variables for min and max values for normalization
+        min_value = float('inf')
+        max_value = float('-inf')
+
+        # Use a SearchCursor to find the minimum and maximum values of the specified column
+        with arcpy.da.SearchCursor(output_layer, [column]) as cursor:
+            for row in cursor:
+                value = row[0]  # Get the value of the current row's specified column
+                if value < min_value:
+                    min_value = value  # Update the min value
+                if value > max_value:
+                    max_value = value  # Update the max value
+        
+        # Define the expression for normalization
+        expression = "(!{}! - {}) / ({}) + 1".format(column, min_value, max_value - min_value)
+
+        # Run CalculateField to populate the 'NORMAL' field with the normalized values
+        arcpy.management.CalculateField(output_layer, "NORMAL", expression, expression_type="PYTHON3")
+
+        # Define the expression for categorizing the normalized values into 3 categories
+        categorization_expression = (
+            "1 if (float(!NORMAL!) >= 1 and float(!NORMAL!) <= 1.33) else " +
+            "2 if (float(!NORMAL!) > 1.33 and float(!NORMAL!) <= 1.66) else " +
+            "3 if (float(!NORMAL!) > 1.66 and float(!NORMAL!) <= 2) else None"
+        )
+
+        # Run CalculateField to populate the 'CATS' field with the category numbers
+        arcpy.management.CalculateField(output_layer, "CATS", categorization_expression, expression_type="PYTHON3")
+
+
+def get_parameter_info(input_datatype, output_datatype, column_datatype):
+    """Shared function for getting parameter definitions with customizable data types."""
+    param0 = arcpy.Parameter(
+        displayName="Input Layer or Table",
+        name="input_layer",
+        datatype=input_datatype,  # This will allow different input data types
+        parameterType="Required",
+        direction="Input"
+    )
+    
+    param1 = arcpy.Parameter(
+        displayName="Output Layer or Table",
+        name="out_features",
+        datatype=output_datatype,  # This will allow different output data types
+        parameterType="Required",
+        direction="Output"
+    )
+
+    param2 = arcpy.Parameter(
+        displayName="Column",
+        name="column",
+        datatype=column_datatype,  # This will allow different column data types
+        parameterType="Required",
+        direction="Input"
+    )
+
+    param1.parameterDependencies = [param0.name]
+    param1.schema.clone = True
+
+    params = [param0, param1, param2]
+     # Set the filter to accept only fields that are Short or Long type
+    params[2].filter.list = ['Short', 'Long', 'Float', 'Double']
+    params[2].parameterDependencies = [params[0].name]
+    
+    return params
+
+class fc(object):
     def __init__(self):
         """Define the tool (tool name is the name of the class)."""
         self.label = "Normalize into Categories (Feature Class to GDB)"
@@ -26,53 +107,13 @@ class FCtoGDB(object):
         self.canRunInBackground = False
 
     def getParameterInfo(self):
-        """Define parameter definitions"""
-        
-        # Input Layer or Table (either a Feature Layer, Table, or Shapefile)
-        # This allows the user to input a Feature Layer, Table, or Shapefile
-        param0 = arcpy.Parameter(
-            displayName="Input Layer or Table",
-            name="input_layer",
-            datatype=["GPFeatureLayer"],  # Allowing feature layer, table, or shapefile
-            parameterType="Required",
-            direction="Input"
+        # Pass custom data types for this class
+        return get_parameter_info(
+            input_datatype=["GPFeatureLayer"],  # Feature Layer for input
+            output_datatype=["GPFeatureLayer"],  # Feature Layer for output
+            column_datatype="Field"  # Field for column
         )
-        
-        # Output Layer or Table (Feature Layer, Table, or Shapefile)
-        # This defines where the output data will be stored (Feature Layer, Table, or Shapefile)
-        param1 = arcpy.Parameter(
-            displayName="Output Layer or Table",
-            name="out_features",
-            datatype=["GPFeatureLayer"],  # Allowing feature layer, table, or shapefile
-            parameterType="Required",
-            direction="Output"
-        )
-
-        # Name of the column/field with information about the gridcell ID
-        # This parameter will allow the user to specify the column to be normalized
-        param2 = arcpy.Parameter(
-            displayName="Column",
-            name="column",
-            datatype="Field",  # This specifies the field name, which is required
-            parameterType="Required",
-            direction="Input"
-        )
-
-        # Define dependencies and schemas if necessary
-        param1.parameterDependencies = [param0.name]  # Output depends on Input
-        param1.schema.clone = True  # Cloning schema to ensure output matches input format
-
-
-
-        # Return the parameter list (required by the toolbox)
-        params = [param0, param1, param2]
-
-        # Set the filter to accept only fields that are Short or Long type
-        params[2].filter.list = ['Short', 'Long', 'Float', 'Double']
-        params[2].parameterDependencies = [params[0].name]
-                
-        return params
-    
+            
     def isLicensed(self):
         """Set whether tool is licensed to execute."""
         return True
@@ -88,79 +129,16 @@ class FCtoGDB(object):
         return
 
     def execute(self, parameters, messages):
-        """The source code of the tool.""" 
-        
-        # get text value of parameters (input/output layer, and the column name)
-        INPUT_LAYER = parameters[0].valueAsText  # Get the input layer (path to the layer)
-        OUTPUT_LAYER = parameters[1].valueAsText  # Get the output layer (path to save output)
-        COLUMN = parameters[2].valueAsText  # Get the column name for normalization
-        
-        # Define datatype for fields to be added in the output (normalization and categorization fields)
-        FIELD_TYPE_NORM = "DOUBLE"  # 'NORMAL' field will be of type DOUBLE
-        FIELD_TYPE_CAT = "INTEGER"  # 'CATS' field will be of type INTEGER
-        
-        # Create a copy of the input layer to preserve original data
-        input_layer_copy = arcpy.Copy_management(
-            INPUT_LAYER, 
-            OUTPUT_LAYER)  # This is where we copy the input layer to the output path
-        
-        # Add a field called 'NORMAL' in the copied layer for normalization calculation
-        arcpy.management.AddField(
-            input_layer_copy, 
-            "NORMAL", 
-            FIELD_TYPE_NORM)  # 'NORMAL' field will store normalized values (float/double)
-        
-        # Add a field called 'CATS' in the copied layer for categorization calculation
-        arcpy.management.AddField(
-            input_layer_copy, 
-            "CATS", 
-            FIELD_TYPE_CAT)  # 'CATS' field will store the categories (integer)
-        
-        # Initialize variables for min and max values for normalization
-        min_value = float('inf')
-        max_value = float('-inf')
-
-        # Use a SearchCursor to find the minimum and maximum values of the specified column
-        with arcpy.da.SearchCursor(OUTPUT_LAYER, [COLUMN]) as cursor:
-            for row in cursor:
-                value = row[0]  # Get the value of the current row's specified column
-                if value < min_value:
-                    min_value = value  # Update the min value
-                if value > max_value:
-                    max_value = value  # Update the max value
-        
-        # Define the expression for normalization
-        # This formula normalizes the values between 1 and 2 based on the min/max values
-        expression = "(!{}! - {}) / ({}) + 1".format(COLUMN, min_value, max_value - min_value)
-
-        # Run CalculateField to populate the 'NORMAL' field with the normalized values
-        arcpy.management.CalculateField(
-            OUTPUT_LAYER,
-            "NORMAL",
-            expression,
-            expression_type="PYTHON3"  # Use Python 3 syntax for calculation
-        )
-
-        # Define the expression for categorizing the normalized values into 3 categories
-        # The 'NORMAL' values will be divided into 3 categories based on predefined ranges
-        categorization_expression = (
-            "1 if (float(!NORMAL!) >= 1 and float(!NORMAL!) <= 1.33) else " +
-            "2 if (float(!NORMAL!) > 1.33 and float(!NORMAL!) <= 1.66) else " +
-            "3 if (float(!NORMAL!) > 1.66 and float(!NORMAL!) <= 2) else None"
-        )
-
-        # Run CalculateField to populate the 'CATS' field with the category numbers
-        arcpy.management.CalculateField(
-            OUTPUT_LAYER,
-            "CATS",
-            categorization_expression,
-            expression_type="PYTHON3"  # Use Python 3 syntax for calculation
+        normalize_and_categorize(self,
+            parameters[0].valueAsText, 
+            parameters[1].valueAsText, 
+            parameters[2].valueAsText
         )
 
         return
     
 
-class SHP2SHP(object):
+class shp(object):
     def __init__(self):
         """Define the tool (tool name is the name of the class)."""
         self.label = "Normalize into Categories (SHP to SHP)"
@@ -168,52 +146,12 @@ class SHP2SHP(object):
         self.canRunInBackground = False
 
     def getParameterInfo(self):
-        """Define parameter definitions"""
-        
-        # Input Layer or Table (either a Feature Layer, Table, or Shapefile)
-        # This allows the user to input a Feature Layer, Table, or Shapefile
-        param0 = arcpy.Parameter(
-            displayName="Input Layer or Table",
-            name="input_layer",
-            datatype=["DEShapeFile"],  # Allowing feature layer, table, or shapefile
-            parameterType="Required",
-            direction="Input"
+        # Pass custom data types for this class
+        return get_parameter_info(
+            input_datatype=["DEShapeFile"],  # Feature Layer for input
+            output_datatype=["DEShapeFile"],  # Feature Layer for output
+            column_datatype="Field"  # Field for column
         )
-        
-        # Output Layer or Table (Feature Layer, Table, or Shapefile)
-        # This defines where the output data will be stored (Feature Layer, Table, or Shapefile)
-        param1 = arcpy.Parameter(
-            displayName="Output Layer or Table",
-            name="out_features",
-            datatype=["DEShapeFile"],  # Allowing feature layer, table, or shapefile
-            parameterType="Required",
-            direction="Output"
-        )
-
-        # Name of the column/field with information about the gridcell ID
-        # This parameter will allow the user to specify the column to be normalized
-        param2 = arcpy.Parameter(
-            displayName="Column",
-            name="column",
-            datatype="Field",  # This specifies the field name, which is required
-            parameterType="Required",
-            direction="Input"
-        )
-
-        # Define dependencies and schemas if necessary
-        param1.parameterDependencies = [param0.name]  # Output depends on Input
-        param1.schema.clone = True  # Cloning schema to ensure output matches input format
-
-
-
-        # Return the parameter list (required by the toolbox)
-        params = [param0, param1, param2]
-
-        # Set the filter to accept only fields that are Short or Long type
-        params[2].filter.list = ['Short', 'Long', 'Float', 'Double']
-        params[2].parameterDependencies = [params[0].name]
-                
-        return params
     
     def isLicensed(self):
         """Set whether tool is licensed to execute."""
@@ -230,78 +168,14 @@ class SHP2SHP(object):
         return
 
     def execute(self, parameters, messages):
-        """The source code of the tool.""" 
-        
-        # get text value of parameters (input/output layer, and the column name)
-        INPUT_LAYER = parameters[0].valueAsText  # Get the input layer (path to the layer)
-        OUTPUT_LAYER = parameters[1].valueAsText  # Get the output layer (path to save output)
-        COLUMN = parameters[2].valueAsText  # Get the column name for normalization
-        
-        # Define datatype for fields to be added in the output (normalization and categorization fields)
-        FIELD_TYPE_NORM = "DOUBLE"  # 'NORMAL' field will be of type DOUBLE
-        FIELD_TYPE_CAT = "INTEGER"  # 'CATS' field will be of type INTEGER
-        
-        # Create a copy of the input layer to preserve original data
-        arcpy.Copy_management(
-            INPUT_LAYER, 
-            OUTPUT_LAYER)  # This is where we copy the input layer to the output path
-            
-        # Add a field called 'NORMAL' in the copied layer for normalization calculation
-        arcpy.management.AddField(
-            OUTPUT_LAYER, 
-            "NORMAL", 
-            FIELD_TYPE_NORM)  # 'NORMAL' field will store normalized values (float/double)
-        
-        # Add a field called 'CATS' in the copied layer for categorization calculation
-        arcpy.management.AddField(
-            OUTPUT_LAYER, 
-            "CATS", 
-            FIELD_TYPE_CAT)  # 'CATS' field will store the categories (integer)
-        
-        # Initialize variables for min and max values for normalization
-        min_value = float('inf')
-        max_value = float('-inf')
-
-        # Use a SearchCursor to find the minimum and maximum values of the specified column
-        with arcpy.da.SearchCursor(OUTPUT_LAYER, [COLUMN]) as cursor:
-            for row in cursor:
-                value = row[0]  # Get the value of the current row's specified column
-                if value < min_value:
-                    min_value = value  # Update the min value
-                if value > max_value:
-                    max_value = value  # Update the max value
-        
-        # Define the expression for normalization
-        # This formula normalizes the values between 1 and 2 based on the min/max values
-        expression = "(!{}! - {}) / ({}) + 1".format(COLUMN, min_value, max_value - min_value)
-
-        # Run CalculateField to populate the 'NORMAL' field with the normalized values
-        arcpy.management.CalculateField(
-            OUTPUT_LAYER,
-            "NORMAL",
-            expression,
-            expression_type="PYTHON3"  # Use Python 3 syntax for calculation
+        normalize_and_categorize(self,
+            parameters[0].valueAsText, 
+            parameters[1].valueAsText, 
+            parameters[2].valueAsText
         )
-
-        # Define the expression for categorizing the normalized values into 3 categories
-        # The 'NORMAL' values will be divided into 3 categories based on predefined ranges
-        categorization_expression = (
-            "1 if (float(!NORMAL!) >= 1 and float(!NORMAL!) <= 1.33) else " +
-            "2 if (float(!NORMAL!) > 1.33 and float(!NORMAL!) <= 1.66) else " +
-            "3 if (float(!NORMAL!) > 1.66 and float(!NORMAL!) <= 2) else None"
-        )
-
-        # Run CalculateField to populate the 'CATS' field with the category numbers
-        arcpy.management.CalculateField(
-            OUTPUT_LAYER,
-            "CATS",
-            categorization_expression,
-            expression_type="PYTHON3"  # Use Python 3 syntax for calculation
-        )
-
         return
     
-class table2table(object):
+class table(object):
     def __init__(self):
         """Define the tool (tool name is the name of the class)."""
         self.label = "Normalize into Categories (Table to GDB)"
@@ -309,52 +183,12 @@ class table2table(object):
         self.canRunInBackground = False
 
     def getParameterInfo(self):
-        """Define parameter definitions"""
-        
-        # Input Layer or Table (either a Feature Layer, Table, or Shapefile)
-        # This allows the user to input a Feature Layer, Table, or Shapefile
-        param0 = arcpy.Parameter(
-            displayName="Input Layer or Table",
-            name="input_layer",
-            datatype=["GPTableView"],  # Allowing feature layer, table, or shapefile
-            parameterType="Required",
-            direction="Input"
+        # Pass custom data types for this class
+        return get_parameter_info(
+            input_datatype=["GPTableView"],  # Feature Layer for input
+            output_datatype=["GPTableView"],  # Feature Layer for output
+            column_datatype="Field"  # Field for column
         )
-        
-        # Output Layer or Table (Feature Layer, Table, or Shapefile)
-        # This defines where the output data will be stored (Feature Layer, Table, or Shapefile)
-        param1 = arcpy.Parameter(
-            displayName="Output Layer or Table",
-            name="out_features",
-            datatype=["GPTableView"],  # Allowing feature layer, table, or shapefile
-            parameterType="Required",
-            direction="Output"
-        )
-
-        # Name of the column/field with information about the gridcell ID
-        # This parameter will allow the user to specify the column to be normalized
-        param2 = arcpy.Parameter(
-            displayName="Column",
-            name="column",
-            datatype="Field",  # This specifies the field name, which is required
-            parameterType="Required",
-            direction="Input"
-        )
-
-        # Define dependencies and schemas if necessary
-        param1.parameterDependencies = [param0.name]  # Output depends on Input
-        param1.schema.clone = True  # Cloning schema to ensure output matches input format
-
-
-
-        # Return the parameter list (required by the toolbox)
-        params = [param0, param1, param2]
-
-        # Set the filter to accept only fields that are Short or Long type
-        params[2].filter.list = ['Short', 'Long', 'Float', 'Double']
-        params[2].parameterDependencies = [params[0].name]
-                
-        return params
     
     def isLicensed(self):
         """Set whether tool is licensed to execute."""
@@ -371,73 +205,9 @@ class table2table(object):
         return
 
     def execute(self, parameters, messages):
-        """The source code of the tool.""" 
-        
-        # get text value of parameters (input/output layer, and the column name)
-        INPUT_LAYER = parameters[0].valueAsText  # Get the input layer (path to the layer)
-        OUTPUT_LAYER = parameters[1].valueAsText  # Get the output layer (path to save output)
-        COLUMN = parameters[2].valueAsText  # Get the column name for normalization
-        
-        # Define datatype for fields to be added in the output (normalization and categorization fields)
-        FIELD_TYPE_NORM = "DOUBLE"  # 'NORMAL' field will be of type DOUBLE
-        FIELD_TYPE_CAT = "INTEGER"  # 'CATS' field will be of type INTEGER
-        
-        # Create a copy of the input layer to preserve original data
-        input_layer_copy = arcpy.Copy_management(
-            INPUT_LAYER, 
-            OUTPUT_LAYER)  # This is where we copy the input layer to the output path
-        
-        # Add a field called 'NORMAL' in the copied layer for normalization calculation
-        arcpy.management.AddField(
-            input_layer_copy, 
-            "NORMAL", 
-            FIELD_TYPE_NORM)  # 'NORMAL' field will store normalized values (float/double)
-        
-        # Add a field called 'CATS' in the copied layer for categorization calculation
-        arcpy.management.AddField(
-            input_layer_copy, 
-            "CATS", 
-            FIELD_TYPE_CAT)  # 'CATS' field will store the categories (integer)
-        
-        # Initialize variables for min and max values for normalization
-        min_value = float('inf')
-        max_value = float('-inf')
-
-        # Use a SearchCursor to find the minimum and maximum values of the specified column
-        with arcpy.da.SearchCursor(OUTPUT_LAYER, [COLUMN]) as cursor:
-            for row in cursor:
-                value = row[0]  # Get the value of the current row's specified column
-                if value < min_value:
-                    min_value = value  # Update the min value
-                if value > max_value:
-                    max_value = value  # Update the max value
-        
-        # Define the expression for normalization
-        # This formula normalizes the values between 1 and 2 based on the min/max values
-        expression = "(!{}! - {}) / ({}) + 1".format(COLUMN, min_value, max_value - min_value)
-
-        # Run CalculateField to populate the 'NORMAL' field with the normalized values
-        arcpy.management.CalculateField(
-            OUTPUT_LAYER,
-            "NORMAL",
-            expression,
-            expression_type="PYTHON3"  # Use Python 3 syntax for calculation
+        normalize_and_categorize(self,
+            parameters[0].valueAsText, 
+            parameters[1].valueAsText, 
+            parameters[2].valueAsText
         )
-
-        # Define the expression for categorizing the normalized values into 3 categories
-        # The 'NORMAL' values will be divided into 3 categories based on predefined ranges
-        categorization_expression = (
-            "1 if (float(!NORMAL!) >= 1 and float(!NORMAL!) <= 1.33) else " +
-            "2 if (float(!NORMAL!) > 1.33 and float(!NORMAL!) <= 1.66) else " +
-            "3 if (float(!NORMAL!) > 1.66 and float(!NORMAL!) <= 2) else None"
-        )
-
-        # Run CalculateField to populate the 'CATS' field with the category numbers
-        arcpy.management.CalculateField(
-            OUTPUT_LAYER,
-            "CATS",
-            categorization_expression,
-            expression_type="PYTHON3"  # Use Python 3 syntax for calculation
-        )
-
         return
